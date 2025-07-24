@@ -29,8 +29,11 @@
 
 #include <QChar>
 #include <QColor>
+#include <QDateTime>
+#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
@@ -49,9 +52,11 @@
 #include <autoware_adapi_v1_msgs/srv/change_operation_mode.hpp>
 #include <autoware_adapi_v1_msgs/srv/clear_route.hpp>
 #include <autoware_adapi_v1_msgs/srv/initialize_localization.hpp>
+#include <autoware_planning_msgs/msg/pose_with_uuid_stamped.hpp>
 #include <autoware_vehicle_msgs/msg/gear_report.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <tier4_external_api_msgs/msg/emergency.hpp>
 #include <tier4_external_api_msgs/srv/set_emergency.hpp>
 #include <tier4_planning_msgs/msg/velocity_limit.hpp>
@@ -78,6 +83,7 @@ class AutowareStatePanel : public rviz_common::Panel
   using MRMState = autoware_adapi_v1_msgs::msg::MrmState;
   using DiagnosticArray = diagnostic_msgs::msg::DiagnosticArray;
   using DiagnosticStatus = diagnostic_msgs::msg::DiagnosticStatus;
+  using PoseWithUuidStamped = autoware_planning_msgs::msg::PoseWithUuidStamped;
 
   Q_OBJECT
 
@@ -97,7 +103,19 @@ public Q_SLOTS:  // NOLINT for Qt
   void onClickAcceptStart();
   void onClickVelocityLimit();
   void onClickEmergencyButton();
+  void onClickSettingMultipleGoalPose();
+  void onClickFinishMultipleGoalPose();
+  void onClickRemoveLastGoalPose();
+  void onClickRemoveAllGoalPoses();
+  void onClickGoToNextPose();
+  void onGoalPose(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg);
+  void updatePoseCountDisplay();
+  void updateMultipleGoalPoseButtons();
   void onSwitchStateChanged(int state);
+  
+  // CSV handling functions
+  bool savePosesToCSV(const QString & filename);
+  bool loadPosesFromCSV(const QString & filename);
 
 protected:
   // Layout
@@ -196,6 +214,23 @@ protected:
 
   QSpinBox * pub_velocity_limit_input_;
   CustomElevatedButton * emergency_button_ptr_;
+  CustomElevatedButton * setting_multiple_goal_pose_button_ptr_;
+
+  // Multiple Goal Pose functionality
+  CustomElevatedButton * finish_goal_pose_button_ptr_;
+  CustomElevatedButton * remove_last_goal_pose_button_ptr_;
+  CustomElevatedButton * remove_all_goal_poses_button_ptr_;
+  CustomElevatedButton * go_to_next_pose_button_ptr_;
+  QLabel * pose_count_label_ptr_;
+  
+  bool multiple_goal_pose_active_{false};
+  bool multiple_goal_pose_finished_{false};
+  bool multiple_goal_pose_from_csv_{false};
+  size_t current_goal_index_{0};
+  std::vector<geometry_msgs::msg::PoseStamped> goal_poses_;
+
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_goal_pose_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_goal_pose_;
 
   bool current_emergency_{false};
 

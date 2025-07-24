@@ -20,6 +20,8 @@
 
 #include <qcolor.h>
 #include <qscrollarea.h>
+#include <QFile>
+#include <QTextStream>
 
 #include <memory>
 #include <string>
@@ -151,6 +153,14 @@ void AutowareStatePanel::onInitialize()
 
   pub_velocity_limit_ = raw_node_->create_publisher<tier4_planning_msgs::msg::VelocityLimit>(
     "/planning/scenario_planning/max_velocity_default", rclcpp::QoS{1}.transient_local());
+
+  // Multiple Goal Pose setup
+  sub_goal_pose_ = raw_node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+    "/planning/mission_planning/goal", rclcpp::QoS{1},
+    std::bind(&AutowareStatePanel::onGoalPose, this, _1));
+
+  pub_goal_pose_ = raw_node_->create_publisher<geometry_msgs::msg::PoseStamped>(
+    "/planning/mission_planning/goal", rclcpp::QoS{1}.transient_local());
 
   QObject::connect(segmented_button, &CustomSegmentedButton::buttonClicked, this, [this](int id) {
     const QList<QAbstractButton *> buttons = segmented_button->getButtonGroup()->buttons();
@@ -452,6 +462,96 @@ QVBoxLayout * AutowareStatePanel::makeVelocityLimitGroup()
   emergency_button_ptr_->setCursor(Qt::PointingHandCursor);
   // set fixed width to fit the text
   connect(emergency_button_ptr_, SIGNAL(clicked()), this, SLOT(onClickEmergencyButton()));
+
+  // Setting Multiple Goal Pose Button
+  setting_multiple_goal_pose_button_ptr_ = new CustomElevatedButton("Setting Multiple Goal Pose");
+  setting_multiple_goal_pose_button_ptr_->setCursor(Qt::PointingHandCursor);
+  connect(setting_multiple_goal_pose_button_ptr_, SIGNAL(clicked()), this, SLOT(onClickSettingMultipleGoalPose()));
+  
+  // Pose counter display
+  pose_count_label_ptr_ = new QLabel("Goal Poses: 0");
+  pose_count_label_ptr_->setStyleSheet(
+    QString("color: %1; font-weight: bold; font-size: 14px; padding: 5px; background-color: %2; border-radius: 5px;")
+      .arg(autoware::state_rviz_plugin::colors::default_colors.on_primary_container.c_str())
+      .arg(autoware::state_rviz_plugin::colors::default_colors.primary_container.c_str()));
+  pose_count_label_ptr_->setAlignment(Qt::AlignCenter);
+  pose_count_label_ptr_->setVisible(false); // Initially hidden
+  
+  // Apply initial styling for the new button
+  setting_multiple_goal_pose_button_ptr_->updateStyle(
+    "Setting Multiple Goal Pose",
+    QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_hover.c_str()),
+    QColor(
+      autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
+    QColor(
+      autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+
+  // Multiple Goal Pose Control Buttons (initially hidden)
+  finish_goal_pose_button_ptr_ = new CustomElevatedButton("Finish");
+  finish_goal_pose_button_ptr_->setCursor(Qt::PointingHandCursor);
+  finish_goal_pose_button_ptr_->setVisible(false);
+  connect(finish_goal_pose_button_ptr_, SIGNAL(clicked()), this, SLOT(onClickFinishMultipleGoalPose()));
+
+  remove_last_goal_pose_button_ptr_ = new CustomElevatedButton("Remove Last");
+  remove_last_goal_pose_button_ptr_->setCursor(Qt::PointingHandCursor);
+  remove_last_goal_pose_button_ptr_->setVisible(false);
+  connect(remove_last_goal_pose_button_ptr_, SIGNAL(clicked()), this, SLOT(onClickRemoveLastGoalPose()));
+
+  remove_all_goal_poses_button_ptr_ = new CustomElevatedButton("Remove All");
+  remove_all_goal_poses_button_ptr_->setCursor(Qt::PointingHandCursor);
+  remove_all_goal_poses_button_ptr_->setVisible(false);
+  connect(remove_all_goal_poses_button_ptr_, SIGNAL(clicked()), this, SLOT(onClickRemoveAllGoalPoses()));
+
+  go_to_next_pose_button_ptr_ = new CustomElevatedButton("Go to Next Pose");
+  go_to_next_pose_button_ptr_->setCursor(Qt::PointingHandCursor);
+  go_to_next_pose_button_ptr_->setVisible(false);
+  connect(go_to_next_pose_button_ptr_, SIGNAL(clicked()), this, SLOT(onClickGoToNextPose()));
+
+  // Apply styling to control buttons
+  finish_goal_pose_button_ptr_->updateStyle(
+    "Finish",
+    QColor(autoware::state_rviz_plugin::colors::default_colors.success.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+
+  remove_last_goal_pose_button_ptr_->updateStyle(
+    "Remove Last",
+    QColor(autoware::state_rviz_plugin::colors::default_colors.warning.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+
+  remove_all_goal_poses_button_ptr_->updateStyle(
+    "Remove All",
+    QColor(autoware::state_rviz_plugin::colors::default_colors.error.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+
+  go_to_next_pose_button_ptr_->updateStyle(
+    "Go to Next Pose",
+    QColor(autoware::state_rviz_plugin::colors::default_colors.primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+
   auto * utility_layout = new QVBoxLayout;
   auto * velocity_limit_layout = new QHBoxLayout;
   auto * velocity_limit_label = new QLabel("km/h");
@@ -474,6 +574,20 @@ QVBoxLayout * AutowareStatePanel::makeVelocityLimitGroup()
   utility_layout->addLayout(velocity_limit_layout);
   utility_layout->addSpacing(25);
   utility_layout->addWidget(emergency_button_ptr_);
+  utility_layout->addSpacing(10);
+  utility_layout->addWidget(setting_multiple_goal_pose_button_ptr_);
+  utility_layout->addSpacing(10);
+  utility_layout->addWidget(pose_count_label_ptr_);
+  
+  // Multiple Goal Pose Control Buttons (initially hidden)
+  utility_layout->addSpacing(5);
+  utility_layout->addWidget(finish_goal_pose_button_ptr_);
+  utility_layout->addSpacing(5);
+  utility_layout->addWidget(remove_last_goal_pose_button_ptr_);
+  utility_layout->addSpacing(5);
+  utility_layout->addWidget(remove_all_goal_poses_button_ptr_);
+  utility_layout->addSpacing(5);
+  utility_layout->addWidget(go_to_next_pose_button_ptr_);
 
   utility_layout->setContentsMargins(15, 0, 15, 0);
 
@@ -780,6 +894,7 @@ void AutowareStatePanel::onEmergencyStatus(
       QColor(autoware::state_rviz_plugin::colors::default_colors.error_press.c_str()),
       QColor(autoware::state_rviz_plugin::colors::default_colors.error_container.c_str()),
       QColor(autoware::state_rviz_plugin::colors::default_colors.error_container.c_str()));
+      //
   } else {
     emergency_button_ptr_->updateStyle(
       "Set Emergency", QColor(autoware::state_rviz_plugin::colors::default_colors.primary.c_str()),
@@ -870,6 +985,451 @@ void AutowareStatePanel::onClickEmergencyButton()
           raw_node_->get_logger(), "service failed: %s", response->status.message.c_str());
       }
     });
+}
+
+void AutowareStatePanel::onClickSettingMultipleGoalPose()
+{
+  RCLCPP_INFO(raw_node_->get_logger(), "Setting Multiple Goal Pose button clicked");
+  
+  if (multiple_goal_pose_active_) {
+    // If already active, stop the current session immediately without asking
+    multiple_goal_pose_active_ = false;
+    multiple_goal_pose_finished_ = false;
+    multiple_goal_pose_from_csv_ = false;
+    
+    // Reset button to original state
+    setting_multiple_goal_pose_button_ptr_->updateStyle(
+      "Setting Multiple Goal Pose",
+      QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.primary.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_hover.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+    
+    RCLCPP_INFO(raw_node_->get_logger(), "Multiple goal pose collection stopped.");
+    updateMultipleGoalPoseButtons();
+    return;
+  }
+  
+  // Ask user if they want to create new poses or load from CSV
+  QMessageBox msgBox;
+  msgBox.setWindowTitle("Goal Pose Setup");
+  msgBox.setText("How would you like to set up goal poses?");
+  msgBox.setIcon(QMessageBox::Question);
+  
+  QPushButton* newPosesBtn = msgBox.addButton("Set New Poses", QMessageBox::ActionRole);
+  QPushButton* loadCsvBtn = msgBox.addButton("Load from CSV", QMessageBox::ActionRole);
+  QPushButton* cancelBtn = msgBox.addButton(QMessageBox::Cancel);
+  
+  msgBox.exec();
+  
+  if (msgBox.clickedButton() == cancelBtn) {
+    return;
+  }
+  
+  if (msgBox.clickedButton() == loadCsvBtn) {
+    // Load poses from CSV
+    QString filename = QFileDialog::getOpenFileName(
+      this,
+      "Load Goal Poses",
+      "",
+      "CSV Files (*.csv)");
+      
+    if (!filename.isEmpty()) {
+      if (loadPosesFromCSV(filename)) {
+        QMessageBox::information(this, "Success", 
+          QString("Loaded %1 goal poses from CSV file!").arg(goal_poses_.size()));
+        RCLCPP_INFO(raw_node_->get_logger(), "Goal poses loaded from: %s", filename.toStdString().c_str());
+        
+        // Set to active state for CSV-loaded poses so user can stop the session
+        multiple_goal_pose_active_ = true;
+        multiple_goal_pose_finished_ = false;
+        multiple_goal_pose_from_csv_ = true;
+        current_goal_index_ = 0;
+        
+        // Update button to show "Stop Setting Goals" for CSV-loaded poses
+        setting_multiple_goal_pose_button_ptr_->updateStyle(
+          "Stop Setting Goals",
+          QColor(autoware::state_rviz_plugin::colors::default_colors.warning.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+        
+        // Show pose counter
+        pose_count_label_ptr_->setVisible(true);
+        updatePoseCountDisplay();
+        updateMultipleGoalPoseButtons();
+        return;
+      } else {
+        QMessageBox::warning(this, "Error", "Failed to load goal poses from file.");
+        RCLCPP_ERROR(raw_node_->get_logger(), "Failed to load goal poses from: %s", filename.toStdString().c_str());
+        return;
+      }
+    } else {
+      return; // User cancelled file dialog
+    }
+  } else if (msgBox.clickedButton() == newPosesBtn) {
+    // User chose "Set New Poses" - continue with the existing logic
+    // Fall through to the existing code below
+  } else {
+    return; // Unknown button clicked
+  }
+  
+  // If we reach here, user chose "Set New Poses"
+  multiple_goal_pose_active_ = true;
+  multiple_goal_pose_finished_ = false;
+  multiple_goal_pose_from_csv_ = false;
+  
+  // Clear previous poses and reset index
+  goal_poses_.clear();
+  current_goal_index_ = 0;
+  
+  // Show pose counter
+  pose_count_label_ptr_->setVisible(true);
+  updatePoseCountDisplay();
+  
+  // Update button text to indicate active state
+  setting_multiple_goal_pose_button_ptr_->updateStyle(
+    "Stop Setting Goals",
+    QColor(autoware::state_rviz_plugin::colors::default_colors.warning.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+  
+  RCLCPP_INFO(raw_node_->get_logger(), "Multiple goal pose collection started. Listening for poses on /planning/mission_planning/goal_t");
+  
+  updateMultipleGoalPoseButtons();
+}
+
+void AutowareStatePanel::onClickFinishMultipleGoalPose()
+{
+  RCLCPP_INFO(raw_node_->get_logger(), "Finish Multiple Goal Pose button clicked");
+  
+  if (goal_poses_.empty()) {
+    RCLCPP_WARN(raw_node_->get_logger(), "No goal poses to finish. Please add some poses first.");
+    return;
+  }
+  
+  // Ask user if they want to save poses to CSV
+  QMessageBox::StandardButton reply = QMessageBox::question(
+    this, "Save Poses", 
+    QString("Do you want to save the %1 goal poses to a CSV file?").arg(goal_poses_.size()),
+    QMessageBox::Yes | QMessageBox::No,
+    QMessageBox::Yes);
+    
+  if (reply == QMessageBox::Yes) {
+    QString filename = QFileDialog::getSaveFileName(
+      this,
+      "Save Goal Poses",
+      QString("goal_poses_%1.csv").arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss")),
+      "CSV Files (*.csv)");
+      
+    if (!filename.isEmpty()) {
+      if (savePosesToCSV(filename)) {
+        QMessageBox::information(this, "Success", "Goal poses saved successfully!");
+        RCLCPP_INFO(raw_node_->get_logger(), "Goal poses saved to: %s", filename.toStdString().c_str());
+      } else {
+        QMessageBox::warning(this, "Error", "Failed to save goal poses to file.");
+        RCLCPP_ERROR(raw_node_->get_logger(), "Failed to save goal poses to: %s", filename.toStdString().c_str());
+      }
+    }
+  }
+  
+  multiple_goal_pose_active_ = false;
+  multiple_goal_pose_finished_ = true;
+  multiple_goal_pose_from_csv_ = false;
+  current_goal_index_ = 0;
+  
+  // Reset button to original state
+  setting_multiple_goal_pose_button_ptr_->updateStyle(
+    "Setting Multiple Goal Pose",
+    QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.primary.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_hover.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+    QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+  
+  RCLCPP_INFO(raw_node_->get_logger(), "Multiple goal poses finished. Total poses: %zu", goal_poses_.size());
+  updateMultipleGoalPoseButtons();
+}
+
+void AutowareStatePanel::onClickRemoveLastGoalPose()
+{
+  RCLCPP_INFO(raw_node_->get_logger(), "Remove Last Goal Pose button clicked");
+  
+  if (goal_poses_.empty()) {
+    RCLCPP_WARN(raw_node_->get_logger(), "No goal poses to remove.");
+    return;
+  }
+  
+  goal_poses_.pop_back();
+  RCLCPP_INFO(raw_node_->get_logger(), "Last goal pose removed. Remaining poses: %zu", goal_poses_.size());
+  updatePoseCountDisplay();
+  updateMultipleGoalPoseButtons();
+}
+
+void AutowareStatePanel::onClickRemoveAllGoalPoses()
+{
+  RCLCPP_INFO(raw_node_->get_logger(), "Remove All Goal Poses button clicked");
+  
+  goal_poses_.clear();
+  current_goal_index_ = 0;
+  RCLCPP_INFO(raw_node_->get_logger(), "All goal poses removed.");
+  updatePoseCountDisplay();
+  updateMultipleGoalPoseButtons();
+}
+
+void AutowareStatePanel::onClickGoToNextPose()
+{
+  RCLCPP_INFO(raw_node_->get_logger(), "Go to Next Pose button clicked");
+  
+  if (goal_poses_.empty()) {
+    RCLCPP_WARN(raw_node_->get_logger(), "No goal poses available.");
+    return;
+  }
+  
+  // Use current index to get the pose to publish
+  size_t pose_index = current_goal_index_;
+  
+  // If we've reached the end, wrap around to the beginning
+  if (pose_index >= goal_poses_.size()) {
+    pose_index = 0;
+    current_goal_index_ = 0;
+    RCLCPP_INFO(raw_node_->get_logger(), "All poses completed. Resetting to first pose.");
+  }
+  
+  const auto & current_pose = goal_poses_[pose_index];
+  
+  // Publish the PoseStamped directly
+  pub_goal_pose_->publish(current_pose);
+  
+  RCLCPP_INFO(raw_node_->get_logger(), "Published goal pose %zu/%zu", pose_index + 1, goal_poses_.size());
+  
+  // Increment index for next time
+  current_goal_index_++;
+  
+  updateMultipleGoalPoseButtons();
+}
+
+void AutowareStatePanel::onGoalPose(const geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+{
+  if (!multiple_goal_pose_active_ || multiple_goal_pose_finished_) {
+    return;
+  }
+  
+  // Don't add poses when using CSV-loaded poses (only collect when manually setting new poses)
+  if (multiple_goal_pose_from_csv_) {
+    return;
+  }
+  
+  // Use the PoseStamped directly
+  goal_poses_.push_back(*msg);
+  
+  RCLCPP_INFO(raw_node_->get_logger(), "Goal pose added from mission planning. Total poses: %zu", goal_poses_.size());
+  updatePoseCountDisplay();
+  updateMultipleGoalPoseButtons();
+}
+
+void AutowareStatePanel::updatePoseCountDisplay()
+{
+  QString count_text = QString("Goal Poses: %1").arg(goal_poses_.size());
+  pose_count_label_ptr_->setText(count_text);
+  
+  // Change color based on pose count
+  QString style_color;
+  if (goal_poses_.size() == 0) {
+    style_color = autoware::state_rviz_plugin::colors::default_colors.surface_variant.c_str();
+  } else if (goal_poses_.size() < 5) {
+    style_color = autoware::state_rviz_plugin::colors::default_colors.primary_container.c_str();
+  } else {
+    style_color = autoware::state_rviz_plugin::colors::default_colors.secondary_container.c_str();
+  }
+  
+  pose_count_label_ptr_->setStyleSheet(
+    QString("color: %1; font-weight: bold; font-size: 14px; padding: 5px; background-color: %2; border-radius: 5px;")
+      .arg(autoware::state_rviz_plugin::colors::default_colors.on_primary_container.c_str())
+      .arg(style_color));
+}
+
+void AutowareStatePanel::updateMultipleGoalPoseButtons()
+{
+  bool has_poses = !goal_poses_.empty();
+  bool is_active = multiple_goal_pose_active_;
+  bool is_finished = multiple_goal_pose_finished_;
+  bool is_from_csv = multiple_goal_pose_from_csv_;
+  
+  // Show/hide control buttons based on state
+  if (is_active && !is_finished) {
+    if (is_from_csv) {
+      // For CSV-loaded poses - only show navigation button
+      finish_goal_pose_button_ptr_->setVisible(false);
+      remove_last_goal_pose_button_ptr_->setVisible(false);
+      remove_all_goal_poses_button_ptr_->setVisible(false);
+      go_to_next_pose_button_ptr_->setVisible(has_poses);
+    } else {
+      // For manually collecting poses - show editing buttons
+      finish_goal_pose_button_ptr_->setVisible(has_poses);
+      remove_last_goal_pose_button_ptr_->setVisible(has_poses);
+      remove_all_goal_poses_button_ptr_->setVisible(has_poses);
+      go_to_next_pose_button_ptr_->setVisible(has_poses);
+    }
+  } else if (is_finished && has_poses) {
+    // Finished state - only show navigation and removal controls
+    finish_goal_pose_button_ptr_->setVisible(false);
+    remove_last_goal_pose_button_ptr_->setVisible(false);
+    remove_all_goal_poses_button_ptr_->setVisible(true);
+    go_to_next_pose_button_ptr_->setVisible(true);
+  } else {
+    // No active session - hide all controls
+    finish_goal_pose_button_ptr_->setVisible(false);
+    remove_last_goal_pose_button_ptr_->setVisible(false);
+    remove_all_goal_poses_button_ptr_->setVisible(false);
+    go_to_next_pose_button_ptr_->setVisible(false);
+  }
+  
+  // Show/hide pose counter based on state
+  pose_count_label_ptr_->setVisible(is_active || (is_finished && has_poses));
+  
+  // Update button states
+  if (has_poses && (is_active || is_finished)) {
+    // Show which pose will be published next (1-based indexing for display)
+    size_t next_pose_index = (current_goal_index_ >= goal_poses_.size()) ? 1 : current_goal_index_ + 1;
+    QString button_text = QString("Go to Pose %1/%2")
+                         .arg(next_pose_index)
+                         .arg(goal_poses_.size());
+    
+    go_to_next_pose_button_ptr_->updateStyle(
+      button_text,
+      QColor(autoware::state_rviz_plugin::colors::default_colors.primary.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+  }
+  
+  // Enable/disable buttons based on state
+  remove_last_goal_pose_button_ptr_->setEnabled(has_poses);
+  remove_all_goal_poses_button_ptr_->setEnabled(has_poses);
+  go_to_next_pose_button_ptr_->setEnabled(has_poses);
+}
+
+bool AutowareStatePanel::savePosesToCSV(const QString & filename)
+{
+  try {
+    QFile file(filename);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      RCLCPP_ERROR(raw_node_->get_logger(), "Could not open file for writing: %s", filename.toStdString().c_str());
+      return false;
+    }
+    
+    QTextStream out(&file);
+    
+    // Write CSV header
+    out << "index,frame_id,position_x,position_y,position_z,orientation_x,orientation_y,orientation_z,orientation_w,timestamp_sec,timestamp_nanosec\n";
+    
+    // Write each pose
+    for (size_t i = 0; i < goal_poses_.size(); ++i) {
+      const auto & pose = goal_poses_[i];
+      out << i + 1 << ","
+          << QString::fromStdString(pose.header.frame_id) << ","
+          << pose.pose.position.x << ","
+          << pose.pose.position.y << ","
+          << pose.pose.position.z << ","
+          << pose.pose.orientation.x << ","
+          << pose.pose.orientation.y << ","
+          << pose.pose.orientation.z << ","
+          << pose.pose.orientation.w << ","
+          << pose.header.stamp.sec << ","
+          << pose.header.stamp.nanosec << "\n";
+    }
+    
+    file.close();
+    RCLCPP_INFO(raw_node_->get_logger(), "Successfully saved %zu poses to CSV", goal_poses_.size());
+    return true;
+    
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(raw_node_->get_logger(), "Exception while saving CSV: %s", e.what());
+    return false;
+  }
+}
+
+bool AutowareStatePanel::loadPosesFromCSV(const QString & filename)
+{
+  try {
+    QFile file(filename);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+      RCLCPP_ERROR(raw_node_->get_logger(), "Could not open file for reading: %s", filename.toStdString().c_str());
+      return false;
+    }
+    
+    QTextStream in(&file);
+    goal_poses_.clear();
+    
+    // Skip header line
+    if (!in.atEnd()) {
+      QString header = in.readLine();
+    }
+    
+    int line_number = 1;
+    while (!in.atEnd()) {
+      line_number++;
+      QString line = in.readLine().trimmed();
+      if (line.isEmpty()) continue;
+      
+      QStringList fields = line.split(',');
+      if (fields.size() != 11) {
+        RCLCPP_WARN(raw_node_->get_logger(), "Invalid CSV format at line %d, expected 11 fields, got %d", 
+                   line_number, fields.size());
+        continue;
+      }
+      
+      try {
+        geometry_msgs::msg::PoseStamped pose;
+        
+        // Parse header
+        pose.header.frame_id = fields[1].toStdString();
+        pose.header.stamp.sec = fields[9].toInt();
+        pose.header.stamp.nanosec = fields[10].toUInt();
+        
+        // Parse position
+        pose.pose.position.x = fields[2].toDouble();
+        pose.pose.position.y = fields[3].toDouble();
+        pose.pose.position.z = fields[4].toDouble();
+        
+        // Parse orientation
+        pose.pose.orientation.x = fields[5].toDouble();
+        pose.pose.orientation.y = fields[6].toDouble();
+        pose.pose.orientation.z = fields[7].toDouble();
+        pose.pose.orientation.w = fields[8].toDouble();
+        
+        goal_poses_.push_back(pose);
+        
+      } catch (const std::exception & e) {
+        RCLCPP_WARN(raw_node_->get_logger(), "Error parsing line %d: %s", line_number, e.what());
+        continue;
+      }
+    }
+    
+    file.close();
+    RCLCPP_INFO(raw_node_->get_logger(), "Successfully loaded %zu poses from CSV", goal_poses_.size());
+    return true;
+    
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(raw_node_->get_logger(), "Exception while loading CSV: %s", e.what());
+    return false;
+  }
 }
 
 }  // namespace rviz_plugins

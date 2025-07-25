@@ -128,6 +128,9 @@ Thermal throttling event can be monitored by reading contents of MSR(Model Speci
    ```sh
    sudo setcap cap_sys_rawio=ep install/system_monitor/lib/system_monitor/msr_reader
    ```
+   ```sh
+   sudo setcap cap_sys_rawio=ep build/system_monitor/msr_reader
+   ```
 
 5. Run 'msr_reader' as the user you created, and run system_monitor as a generic user.
 
@@ -168,6 +171,10 @@ As with the CPU monitor, this package provides an approach to minimize security 
    ```sh
    sudo setcap 'cap_sys_rawio=ep cap_sys_admin=ep' install/system_monitor/lib/system_monitor/hdd_reader
    ```
+   ```sh
+   sudo setcap 'cap_sys_rawio=ep cap_sys_admin=ep' build/system_monitor/hdd_reader
+   ```
+
 
 4. Run 'hdd_reader' as the user you created, and run system_monitor as a generic user.
 

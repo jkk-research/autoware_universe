@@ -19,7 +19,7 @@
       object_shiftable_ratio_threshold: 0.6
 
       # turn signal
-      min_length_for_turn_signal_activation: 10.0 # [m]
+      min_length_for_turn_signal_activation: 1.0 # [m]
       length_ratio_for_turn_signal_deactivation: 0.8 # ratio (desired end position)
 
       # longitudinal acceleration

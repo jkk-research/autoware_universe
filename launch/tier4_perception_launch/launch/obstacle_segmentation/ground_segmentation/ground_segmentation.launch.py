@@ -227,28 +227,61 @@ class GroundSegmentationPipeline:
         return components
 
     def create_common_pipeline(self, input_topic, output_topic):
+        max_z_v = (
+            self.vehicle_info["max_height_offset"]
+            + self.ground_segmentation_param["vehicle_crop_box_filter"]["parameters"]["margin_max_z"]
+        )
+        min_z_v = (
+            self.vehicle_info["min_height_offset"]
+            + self.ground_segmentation_param["vehicle_crop_box_filter"]["parameters"]["margin_min_z"]
+        )
+ 
         max_z = (
             self.vehicle_info["max_height_offset"]
-            + self.ground_segmentation_param["common_crop_box_filter"]["parameters"]["margin_max_z"]
+            + self.ground_segmentation_param["height_crop_box_filter"]["parameters"]["margin_max_z"]
         )
         min_z = (
             self.vehicle_info["min_height_offset"]
-            + self.ground_segmentation_param["common_crop_box_filter"]["parameters"]["margin_min_z"]
+            + self.ground_segmentation_param["height_crop_box_filter"]["parameters"]["margin_min_z"]
         )
         # Get the plugin name from the full plugin path
         ground_segmentation_plugin_name = self.ground_segmentation_param["common_ground_filter"][
             "plugin"
         ]
         ground_segmentation_plugin_name = ground_segmentation_plugin_name.split("::")[-1]
-
+ 
         components = []
         components.append(
             ComposableNode(
                 package="autoware_pointcloud_preprocessor",
                 plugin="autoware::pointcloud_preprocessor::CropBoxFilterComponent",
-                name="crop_box_filter",
+                name="crop_box_filter_vehicle",
                 remappings=[
                     ("input", input_topic),
+                    ("output", "range_cropped_vehicle/pointcloud"),
+                ],
+                parameters=[
+                    {
+                        "input_frame": LaunchConfiguration("base_frame"),
+                        "output_frame": LaunchConfiguration("base_frame"),
+                        "max_z": max_z_v,
+                        "min_z": min_z_v,
+                    },
+                    self.ground_segmentation_param["vehicle_crop_box_filter"]["parameters"],
+                ],
+                extra_arguments=[
+                    {"use_intra_process_comms": LaunchConfiguration("use_intra_process")}
+                ],
+            )
+        )
+ 
+        components.append(
+            ComposableNode(
+                package="autoware_pointcloud_preprocessor",
+                plugin="autoware::pointcloud_preprocessor::CropBoxFilterComponent",
+                name="crop_box_filter_height",
+                remappings=[
+                    ("input", "range_cropped_vehicle/pointcloud"),
                     ("output", "range_cropped/pointcloud"),
                 ],
                 parameters=[
@@ -258,7 +291,7 @@ class GroundSegmentationPipeline:
                         "max_z": max_z,
                         "min_z": min_z,
                     },
-                    self.ground_segmentation_param["common_crop_box_filter"]["parameters"],
+                    self.ground_segmentation_param["height_crop_box_filter"]["parameters"],
                 ],
                 extra_arguments=[
                     {"use_intra_process_comms": LaunchConfiguration("use_intra_process")}

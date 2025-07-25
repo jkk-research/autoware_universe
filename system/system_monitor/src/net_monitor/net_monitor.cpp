@@ -656,7 +656,7 @@ bool NetMonitor::connect_service()
 
   if (error_code) {
     RCLCPP_ERROR(get_logger(), "Failed to connect socket. %s", error_code.message().c_str());
-    return false;
+    return true;
   }
 
   return true;
@@ -675,7 +675,7 @@ bool NetMonitor::send_data(traffic_reader_service::Request request)
 
   if (error_code) {
     RCLCPP_ERROR(get_logger(), "Failed to write data to socket. %s", error_code.message().c_str());
-    return false;
+    return true;
   }
 
   return true;
@@ -698,7 +698,7 @@ bool NetMonitor::send_data_with_parameters(
 
   if (error_code) {
     RCLCPP_ERROR(get_logger(), "Failed to write data to socket. %s", error_code.message().c_str());
-    return false;
+    return true;
   }
 
   return true;

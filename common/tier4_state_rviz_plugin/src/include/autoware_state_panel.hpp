@@ -113,9 +113,18 @@ public Q_SLOTS:  // NOLINT for Qt
   void updateMultipleGoalPoseButtons();
   void onSwitchStateChanged(int state);
   
+  // Individual pose button management
+  void createIndividualPoseButtons();
+  void clearIndividualPoseButtons();
+  void updateIndividualPoseButtons();
+  void onIndividualPoseButtonClicked(int pose_index);
+  
   // CSV handling functions
   bool savePosesToCSV(const QString & filename);
   bool loadPosesFromCSV(const QString & filename);
+  
+  // Helper function to maintain continuous pose naming
+  void renumberPoseNames();
 
 protected:
   // Layout
@@ -223,11 +232,18 @@ protected:
   CustomElevatedButton * go_to_next_pose_button_ptr_;
   QLabel * pose_count_label_ptr_;
   
+  // Individual pose buttons
+  std::vector<CustomElevatedButton *> individual_pose_buttons_;
+  QVBoxLayout * pose_buttons_layout_;
+  QLabel * pose_buttons_label_;
+  
   bool multiple_goal_pose_active_{false};
   bool multiple_goal_pose_finished_{false};
   bool multiple_goal_pose_from_csv_{false};
   size_t current_goal_index_{0};
+  size_t last_clicked_pose_index_{SIZE_MAX}; // SIZE_MAX means no pose clicked yet
   std::vector<geometry_msgs::msg::PoseStamped> goal_poses_;
+  std::vector<std::string> pose_names_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_goal_pose_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_goal_pose_;

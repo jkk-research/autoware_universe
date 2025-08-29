@@ -588,6 +588,19 @@ QVBoxLayout * AutowareStatePanel::makeVelocityLimitGroup()
   utility_layout->addWidget(remove_all_goal_poses_button_ptr_);
   utility_layout->addSpacing(5);
   utility_layout->addWidget(go_to_next_pose_button_ptr_);
+  
+  // Add individual pose buttons layout
+  utility_layout->addSpacing(15);
+  pose_buttons_label_ = new QLabel("Individual Goal Poses:");
+  pose_buttons_label_->setStyleSheet(
+    QString("color: %1; font-weight: bold;")
+      .arg(autoware::state_rviz_plugin::colors::default_colors.on_secondary_container.c_str()));
+  pose_buttons_label_->setVisible(false); // Initially hidden
+  utility_layout->addWidget(pose_buttons_label_);
+  utility_layout->addSpacing(5);
+  
+  pose_buttons_layout_ = new QVBoxLayout;
+  utility_layout->addLayout(pose_buttons_layout_);
 
   utility_layout->setContentsMargins(15, 0, 15, 0);
 
@@ -997,6 +1010,9 @@ void AutowareStatePanel::onClickSettingMultipleGoalPose()
     multiple_goal_pose_finished_ = false;
     multiple_goal_pose_from_csv_ = false;
     
+    // Clear individual pose buttons when stopping
+    clearIndividualPoseButtons();
+    
     // Reset button to original state
     setting_multiple_goal_pose_button_ptr_->updateStyle(
       "Setting Multiple Goal Pose",
@@ -1043,20 +1059,22 @@ void AutowareStatePanel::onClickSettingMultipleGoalPose()
           QString("Loaded %1 goal poses from CSV file!").arg(goal_poses_.size()));
         RCLCPP_INFO(raw_node_->get_logger(), "Goal poses loaded from: %s", filename.toStdString().c_str());
         
-        // Set to active state for CSV-loaded poses so user can stop the session
-        multiple_goal_pose_active_ = true;
-        multiple_goal_pose_finished_ = false;
+        // Set to finished state for CSV-loaded poses so individual buttons appear
+        multiple_goal_pose_active_ = false;
+        multiple_goal_pose_finished_ = true;
         multiple_goal_pose_from_csv_ = true;
         current_goal_index_ = 0;
+        // Reset to "no pose clicked yet" so first pose will be 1/n
+        last_clicked_pose_index_ = SIZE_MAX;
         
-        // Update button to show "Stop Setting Goals" for CSV-loaded poses
+        // Reset button to original state since poses are loaded and finished
         setting_multiple_goal_pose_button_ptr_->updateStyle(
-          "Stop Setting Goals",
-          QColor(autoware::state_rviz_plugin::colors::default_colors.warning.c_str()),
-          QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary.c_str()),
-          QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
-          QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
-          QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+          "Setting Multiple Goal Pose",
+          QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.primary.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_hover.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
+          QColor(autoware::state_rviz_plugin::colors::default_colors.surface_container_low_pressed.c_str()),
           QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
           QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
         
@@ -1085,11 +1103,14 @@ void AutowareStatePanel::onClickSettingMultipleGoalPose()
   multiple_goal_pose_finished_ = false;
   multiple_goal_pose_from_csv_ = false;
   
-  // Clear previous poses and reset index
-  goal_poses_.clear();
-  current_goal_index_ = 0;
-  
-  // Show pose counter
+    // Clear previous poses and reset index
+    goal_poses_.clear();
+    pose_names_.clear();
+    current_goal_index_ = 0;
+    last_clicked_pose_index_ = SIZE_MAX; // Reset to "no pose clicked yet"
+    
+    // Clear individual pose buttons
+    clearIndividualPoseButtons();  // Show pose counter
   pose_count_label_ptr_->setVisible(true);
   updatePoseCountDisplay();
   
@@ -1147,6 +1168,8 @@ void AutowareStatePanel::onClickFinishMultipleGoalPose()
   multiple_goal_pose_finished_ = true;
   multiple_goal_pose_from_csv_ = false;
   current_goal_index_ = 0;
+  // Reset to "no pose clicked yet" so first pose will be 1/n
+  last_clicked_pose_index_ = SIZE_MAX;
   
   // Reset button to original state
   setting_multiple_goal_pose_button_ptr_->updateStyle(
@@ -1173,6 +1196,17 @@ void AutowareStatePanel::onClickRemoveLastGoalPose()
   }
   
   goal_poses_.pop_back();
+  pose_names_.pop_back();
+  
+  // Adjust last_clicked_pose_index_ if it points to the removed pose or becomes invalid
+  if (goal_poses_.empty()) {
+    last_clicked_pose_index_ = SIZE_MAX; // Reset to "no pose clicked yet"
+  } else if (last_clicked_pose_index_ != SIZE_MAX && last_clicked_pose_index_ >= goal_poses_.size()) {
+    last_clicked_pose_index_ = goal_poses_.size() - 1;
+  }
+  
+  // Renumber remaining pose names to maintain continuity
+  renumberPoseNames();
   RCLCPP_INFO(raw_node_->get_logger(), "Last goal pose removed. Remaining poses: %zu", goal_poses_.size());
   updatePoseCountDisplay();
   updateMultipleGoalPoseButtons();
@@ -1183,7 +1217,9 @@ void AutowareStatePanel::onClickRemoveAllGoalPoses()
   RCLCPP_INFO(raw_node_->get_logger(), "Remove All Goal Poses button clicked");
   
   goal_poses_.clear();
+  pose_names_.clear();
   current_goal_index_ = 0;
+  last_clicked_pose_index_ = SIZE_MAX; // Reset to "no pose clicked yet"
   RCLCPP_INFO(raw_node_->get_logger(), "All goal poses removed.");
   updatePoseCountDisplay();
   updateMultipleGoalPoseButtons();
@@ -1198,25 +1234,30 @@ void AutowareStatePanel::onClickGoToNextPose()
     return;
   }
   
-  // Use current index to get the pose to publish
-  size_t pose_index = current_goal_index_;
-  
-  // If we've reached the end, wrap around to the beginning
-  if (pose_index >= goal_poses_.size()) {
-    pose_index = 0;
-    current_goal_index_ = 0;
-    RCLCPP_INFO(raw_node_->get_logger(), "All poses completed. Resetting to first pose.");
+  // Calculate next pose index based on last clicked pose
+  size_t next_pose_index;
+  if (last_clicked_pose_index_ == SIZE_MAX) {
+    // No pose clicked yet, start with first pose
+    next_pose_index = 0;
+  } else {
+    // Normal case: next pose after last clicked
+    next_pose_index = (last_clicked_pose_index_ + 1) >= goal_poses_.size() ? 
+                     0 : last_clicked_pose_index_ + 1;
   }
   
-  const auto & current_pose = goal_poses_[pose_index];
+  const auto & current_pose = goal_poses_[next_pose_index];
+  std::string pose_name = (next_pose_index < pose_names_.size()) ? 
+                         pose_names_[next_pose_index] : 
+                         "pose_" + std::to_string(next_pose_index + 1);
   
   // Publish the PoseStamped directly
   pub_goal_pose_->publish(current_pose);
   
-  RCLCPP_INFO(raw_node_->get_logger(), "Published goal pose %zu/%zu", pose_index + 1, goal_poses_.size());
+  RCLCPP_INFO(raw_node_->get_logger(), "Published goal pose '%s' (%zu/%zu)", 
+             pose_name.c_str(), next_pose_index + 1, goal_poses_.size());
   
-  // Increment index for next time
-  current_goal_index_++;
+  // Update last clicked pose index to the one we just published
+  last_clicked_pose_index_ = next_pose_index;
   
   updateMultipleGoalPoseButtons();
 }
@@ -1234,6 +1275,10 @@ void AutowareStatePanel::onGoalPose(const geometry_msgs::msg::PoseStamped::Const
   
   // Use the PoseStamped directly
   goal_poses_.push_back(*msg);
+  
+  // Generate a continuous name for the new pose
+  std::string pose_name = "pose_" + std::to_string(goal_poses_.size());
+  pose_names_.push_back(pose_name);
   
   RCLCPP_INFO(raw_node_->get_logger(), "Goal pose added from mission planning. Total poses: %zu", goal_poses_.size());
   updatePoseCountDisplay();
@@ -1302,10 +1347,22 @@ void AutowareStatePanel::updateMultipleGoalPoseButtons()
   
   // Update button states
   if (has_poses && (is_active || is_finished)) {
-    // Show which pose will be published next (1-based indexing for display)
-    size_t next_pose_index = (current_goal_index_ >= goal_poses_.size()) ? 1 : current_goal_index_ + 1;
-    QString button_text = QString("Go to Pose %1/%2")
-                         .arg(next_pose_index)
+    // Calculate next pose index based on last clicked pose
+    // Special case: if no individual pose was clicked yet, show pose 1
+    // Otherwise, show the pose after the last clicked one (with wrapping)
+    size_t next_pose_index_0_based;
+    if (last_clicked_pose_index_ == SIZE_MAX) {
+      // No pose clicked yet, start with first pose
+      next_pose_index_0_based = 0;
+    } else {
+      // Normal case: next pose after last clicked
+      next_pose_index_0_based = (last_clicked_pose_index_ + 1) >= goal_poses_.size() ? 
+                               0 : last_clicked_pose_index_ + 1;
+    }
+    size_t next_pose_index_1_based = next_pose_index_0_based + 1;
+    
+    QString button_text = QString("Go to Next Pose %1/%2")
+                         .arg(next_pose_index_1_based)
                          .arg(goal_poses_.size());
     
     go_to_next_pose_button_ptr_->updateStyle(
@@ -1323,6 +1380,9 @@ void AutowareStatePanel::updateMultipleGoalPoseButtons()
   remove_last_goal_pose_button_ptr_->setEnabled(has_poses);
   remove_all_goal_poses_button_ptr_->setEnabled(has_poses);
   go_to_next_pose_button_ptr_->setEnabled(has_poses);
+  
+  // Update individual pose buttons
+  updateIndividualPoseButtons();
 }
 
 bool AutowareStatePanel::savePosesToCSV(const QString & filename)
@@ -1337,12 +1397,18 @@ bool AutowareStatePanel::savePosesToCSV(const QString & filename)
     QTextStream out(&file);
     
     // Write CSV header
-    out << "index,frame_id,position_x,position_y,position_z,orientation_x,orientation_y,orientation_z,orientation_w,timestamp_sec,timestamp_nanosec\n";
+    out << "index,name,frame_id,position_x,position_y,position_z,orientation_x,orientation_y,orientation_z,orientation_w,timestamp_sec,timestamp_nanosec\n";
     
     // Write each pose
     for (size_t i = 0; i < goal_poses_.size(); ++i) {
       const auto & pose = goal_poses_[i];
+      // Get name from pose_names_ if available, otherwise use default naming
+      QString name = (i < pose_names_.size() && !pose_names_[i].empty()) ? 
+                     QString::fromStdString(pose_names_[i]) : 
+                     QString("pose_%1").arg(i + 1);
+      
       out << i + 1 << ","
+          << name << ","
           << QString::fromStdString(pose.header.frame_id) << ","
           << pose.pose.position.x << ","
           << pose.pose.position.y << ","
@@ -1376,6 +1442,7 @@ bool AutowareStatePanel::loadPosesFromCSV(const QString & filename)
     
     QTextStream in(&file);
     goal_poses_.clear();
+    pose_names_.clear();
     
     // Skip header line
     if (!in.atEnd()) {
@@ -1389,32 +1456,56 @@ bool AutowareStatePanel::loadPosesFromCSV(const QString & filename)
       if (line.isEmpty()) continue;
       
       QStringList fields = line.split(',');
-      if (fields.size() != 11) {
-        RCLCPP_WARN(raw_node_->get_logger(), "Invalid CSV format at line %d, expected 11 fields, got %d", 
+      // Support both old format (11 fields) and new format (12 fields with name)
+      if (fields.size() != 11 && fields.size() != 12) {
+        RCLCPP_WARN(raw_node_->get_logger(), "Invalid CSV format at line %d, expected 11 or 12 fields, got %d", 
                    line_number, fields.size());
         continue;
       }
       
       try {
         geometry_msgs::msg::PoseStamped pose;
+        std::string pose_name;
+        
+        // Determine field indices based on whether name column exists
+        int name_idx = (fields.size() == 12) ? 1 : -1;
+        int frame_id_idx = (fields.size() == 12) ? 2 : 1;
+        int pos_x_idx = (fields.size() == 12) ? 3 : 2;
+        int pos_y_idx = (fields.size() == 12) ? 4 : 3;
+        int pos_z_idx = (fields.size() == 12) ? 5 : 4;
+        int ori_x_idx = (fields.size() == 12) ? 6 : 5;
+        int ori_y_idx = (fields.size() == 12) ? 7 : 6;
+        int ori_z_idx = (fields.size() == 12) ? 8 : 7;
+        int ori_w_idx = (fields.size() == 12) ? 9 : 8;
+        int stamp_sec_idx = (fields.size() == 12) ? 10 : 9;
+        int stamp_nanosec_idx = (fields.size() == 12) ? 11 : 10;
+        
+        // Parse name if available
+        if (name_idx >= 0) {
+          pose_name = fields[name_idx].toStdString();
+        } else {
+          // Generate default name if not in CSV
+          pose_name = "pose_" + std::to_string(pose_names_.size() + 1);
+        }
         
         // Parse header
-        pose.header.frame_id = fields[1].toStdString();
-        pose.header.stamp.sec = fields[9].toInt();
-        pose.header.stamp.nanosec = fields[10].toUInt();
+        pose.header.frame_id = fields[frame_id_idx].toStdString();
+        pose.header.stamp.sec = fields[stamp_sec_idx].toInt();
+        pose.header.stamp.nanosec = fields[stamp_nanosec_idx].toUInt();
         
         // Parse position
-        pose.pose.position.x = fields[2].toDouble();
-        pose.pose.position.y = fields[3].toDouble();
-        pose.pose.position.z = fields[4].toDouble();
+        pose.pose.position.x = fields[pos_x_idx].toDouble();
+        pose.pose.position.y = fields[pos_y_idx].toDouble();
+        pose.pose.position.z = fields[pos_z_idx].toDouble();
         
         // Parse orientation
-        pose.pose.orientation.x = fields[5].toDouble();
-        pose.pose.orientation.y = fields[6].toDouble();
-        pose.pose.orientation.z = fields[7].toDouble();
-        pose.pose.orientation.w = fields[8].toDouble();
+        pose.pose.orientation.x = fields[ori_x_idx].toDouble();
+        pose.pose.orientation.y = fields[ori_y_idx].toDouble();
+        pose.pose.orientation.z = fields[ori_z_idx].toDouble();
+        pose.pose.orientation.w = fields[ori_w_idx].toDouble();
         
         goal_poses_.push_back(pose);
+        pose_names_.push_back(pose_name);
         
       } catch (const std::exception & e) {
         RCLCPP_WARN(raw_node_->get_logger(), "Error parsing line %d: %s", line_number, e.what());
@@ -1423,6 +1514,15 @@ bool AutowareStatePanel::loadPosesFromCSV(const QString & filename)
     }
     
     file.close();
+    
+    // Only renumber poses that don't have names or have default names
+    // Preserve custom names from CSV
+    for (size_t i = 0; i < pose_names_.size(); ++i) {
+      if (pose_names_[i].empty() || pose_names_[i].find("pose_") == 0) {
+        pose_names_[i] = "pose_" + std::to_string(i + 1);
+      }
+    }
+    
     RCLCPP_INFO(raw_node_->get_logger(), "Successfully loaded %zu poses from CSV", goal_poses_.size());
     return true;
     
@@ -1430,6 +1530,102 @@ bool AutowareStatePanel::loadPosesFromCSV(const QString & filename)
     RCLCPP_ERROR(raw_node_->get_logger(), "Exception while loading CSV: %s", e.what());
     return false;
   }
+}
+
+void AutowareStatePanel::renumberPoseNames()
+{
+  for (size_t i = 0; i < pose_names_.size(); ++i) {
+    pose_names_[i] = "pose_" + std::to_string(i + 1);
+  }
+}
+
+void AutowareStatePanel::createIndividualPoseButtons()
+{
+  clearIndividualPoseButtons();
+  
+  for (size_t i = 0; i < goal_poses_.size(); ++i) {
+    QString button_name = (i < pose_names_.size() && !pose_names_[i].empty()) ? 
+                         QString::fromStdString(pose_names_[i]) : 
+                         QString("pose_%1").arg(i + 1);
+    
+    CustomElevatedButton * pose_button = new CustomElevatedButton(button_name);
+    pose_button->setCursor(Qt::PointingHandCursor);
+    
+    // Style the button
+    pose_button->updateStyle(
+      button_name,
+      QColor(autoware::state_rviz_plugin::colors::default_colors.primary_container.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.on_primary_container.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.hover_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.pressed_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.checked_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_bg.c_str()),
+      QColor(autoware::state_rviz_plugin::colors::default_colors.disabled_button_text.c_str()));
+    
+    // Connect button to slot with pose index
+    connect(pose_button, &QPushButton::clicked, this, [this, i]() {
+      onIndividualPoseButtonClicked(i);
+    });
+    
+    individual_pose_buttons_.push_back(pose_button);
+    pose_buttons_layout_->addWidget(pose_button);
+    pose_buttons_layout_->addSpacing(3);
+  }
+}
+
+void AutowareStatePanel::clearIndividualPoseButtons()
+{
+  // Delete all existing buttons and clear the layout
+  for (auto * button : individual_pose_buttons_) {
+    pose_buttons_layout_->removeWidget(button);
+    delete button;
+  }
+  individual_pose_buttons_.clear();
+  
+  // Clear all items from layout
+  QLayoutItem *child;
+  while ((child = pose_buttons_layout_->takeAt(0)) != nullptr) {
+    delete child;
+  }
+}
+
+void AutowareStatePanel::updateIndividualPoseButtons()
+{
+  if (multiple_goal_pose_finished_ && !goal_poses_.empty()) {
+    // Show label and create buttons when poses are finished
+    pose_buttons_label_->setVisible(true);
+    createIndividualPoseButtons();
+  } else {
+    // Hide label and clear buttons when not in finished state or no poses
+    pose_buttons_label_->setVisible(false);
+    clearIndividualPoseButtons();
+  }
+}
+
+void AutowareStatePanel::onIndividualPoseButtonClicked(int pose_index)
+{
+  if (pose_index < 0 || pose_index >= static_cast<int>(goal_poses_.size())) {
+    RCLCPP_WARN(raw_node_->get_logger(), "Invalid pose index: %d", pose_index);
+    return;
+  }
+  
+  // Update last clicked pose index for the "Go to Next Pose" button
+  last_clicked_pose_index_ = static_cast<size_t>(pose_index);
+  
+  const auto & pose = goal_poses_[pose_index];
+  std::string pose_name = (pose_index < static_cast<int>(pose_names_.size())) ? 
+                         pose_names_[pose_index] : 
+                         "pose_" + std::to_string(pose_index + 1);
+  
+  RCLCPP_INFO(raw_node_->get_logger(), "Publishing pose '%s' (index %d)", pose_name.c_str(), pose_index);
+  
+  // Publish the pose
+  pub_goal_pose_->publish(pose);
+  
+  RCLCPP_INFO(raw_node_->get_logger(), "Successfully published pose '%s'", pose_name.c_str());
+  
+  // Update the "Go to Next Pose" button caption
+  updateMultipleGoalPoseButtons();
 }
 
 }  // namespace rviz_plugins

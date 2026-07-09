@@ -31,9 +31,14 @@ TrafficLightRoiVisualizerNode::TrafficLightRoiVisualizerNode(const rclcpp::NodeO
   using std::placeholders::_3;
   using std::placeholders::_4;
   enable_fine_detection_ = this->declare_parameter<bool>("enable_fine_detection");
+  roi_only_mode_ = this->declare_parameter<bool>("roi_only_mode", false);
   use_image_transport_ = this->declare_parameter<bool>("use_image_transport");
 
-  if (enable_fine_detection_) {
+  if (roi_only_mode_) {
+    sync_image_only_.reset(new SyncImageOnly(SyncPolicyImageOnly(10), image_sub_, roi_sub_));
+    sync_image_only_->registerCallback(
+      std::bind(&TrafficLightRoiVisualizerNode::imageOnlyRoiCallback, this, _1, _2));
+  } else if (enable_fine_detection_) {
     sync_with_rough_roi_.reset(new SyncWithRoughRoi(
       SyncPolicyWithRoughRoi(10), image_sub_, roi_sub_, rough_roi_sub_, traffic_signals_sub_));
     sync_with_rough_roi_->registerCallback(
@@ -67,19 +72,43 @@ void TrafficLightRoiVisualizerNode::connectCb()
   }
   if (num_subscribers == 0) {
     image_sub_.unsubscribe();
-    traffic_signals_sub_.unsubscribe();
     roi_sub_.unsubscribe();
-    if (enable_fine_detection_) {
+    traffic_signals_sub_.unsubscribe();
+    if (!roi_only_mode_ && enable_fine_detection_) {
       rough_roi_sub_.unsubscribe();
     }
   } else if (!image_sub_.getSubscriber()) {
     image_sub_.subscribe(this, "~/input/image", "raw", rmw_qos_profile_sensor_data);
     roi_sub_.subscribe(this, "~/input/rois", rclcpp::QoS{1}.get_rmw_qos_profile());
-    traffic_signals_sub_.subscribe(
-      this, "~/input/traffic_signals", rclcpp::QoS{1}.get_rmw_qos_profile());
-    if (enable_fine_detection_) {
+    if (!roi_only_mode_) {
+      traffic_signals_sub_.subscribe(
+        this, "~/input/traffic_signals", rclcpp::QoS{1}.get_rmw_qos_profile());
+    }
+    if (!roi_only_mode_ && enable_fine_detection_) {
       rough_roi_sub_.subscribe(this, "~/input/rough/rois", rclcpp::QoS{1}.get_rmw_qos_profile());
     }
+  }
+}
+
+void TrafficLightRoiVisualizerNode::imageOnlyRoiCallback(
+  const sensor_msgs::msg::Image::ConstSharedPtr & input_image_msg,
+  const tier4_perception_msgs::msg::TrafficLightRoiArray::ConstSharedPtr & input_tl_roi_msg)
+{
+  cv_bridge::CvImagePtr cv_ptr;
+  try {
+    cv_ptr = cv_bridge::toCvCopy(input_image_msg, sensor_msgs::image_encodings::RGB8);
+    for (const auto & tl_roi : input_tl_roi_msg->rois) {
+      createRect(cv_ptr->image, tl_roi, cv::Scalar(255, 255, 255));
+    }
+  } catch (cv_bridge::Exception & e) {
+    RCLCPP_ERROR(
+      get_logger(), "Could not convert from '%s' to 'rgb8'.", input_image_msg->encoding.c_str());
+    return;
+  }
+  if (use_image_transport_) {
+    image_pub_.publish(cv_ptr->toImageMsg());
+  } else {
+    simple_image_pub_->publish(*cv_ptr->toImageMsg());
   }
 }
 

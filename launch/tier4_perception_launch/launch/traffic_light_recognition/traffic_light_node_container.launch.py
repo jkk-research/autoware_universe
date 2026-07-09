@@ -179,7 +179,10 @@ def create_traffic_light_node_container(namespace, context, *args, **kwargs):
                 plugin="autoware::traffic_light::TrafficLightFineDetectorNode",
                 name="traffic_light_fine_detector",
                 namespace=f"{namespace}/detection",
-                parameters=[fine_detector_model_param],
+                parameters=[
+                    fine_detector_model_param,
+                    {"use_image_roi_fallback": LaunchConfiguration("image_only")},
+                ],
                 remappings=[
                     ("~/input/image", camera_arguments["input/image"]),
                     ("~/input/rois", "rough/rois"),
@@ -216,6 +219,7 @@ def generate_launch_description():
     add_launch_arg("all_camera_namespaces", "[camera6, camera7]")
     add_launch_arg("enable_image_decompressor", "True")
     add_launch_arg("enable_fine_detection", "True")
+    add_launch_arg("image_only", "True")
     add_launch_arg("use_image_transport", "True")
 
     # traffic_light_fine_detector

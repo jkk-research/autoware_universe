@@ -71,6 +71,7 @@ public:
     const sensor_msgs::msg::Image::ConstSharedPtr in_image_msg,
     const TrafficLightRoiArray::ConstSharedPtr rough_roi_msg,
     const TrafficLightRoiArray::ConstSharedPtr expect_roi_msg);
+  void imageOnlyCallback(const sensor_msgs::msg::Image::ConstSharedPtr in_image_msg);
 
 private:
   /**
@@ -144,9 +145,12 @@ private:
 
   // variables
   image_transport::SubscriberFilter image_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_only_sub_;
   message_filters::Subscriber<TrafficLightRoiArray> rough_roi_sub_;
   message_filters::Subscriber<TrafficLightRoiArray> expect_roi_sub_;
   std::mutex connect_mutex_;
+  rclcpp::Publisher<TrafficLightRoiArray>::SharedPtr generated_rough_roi_pub_;
+  rclcpp::Publisher<TrafficLightRoiArray>::SharedPtr generated_expect_roi_pub_;
   rclcpp::Publisher<TrafficLightRoiArray>::SharedPtr output_roi_pub_;
   rclcpp::Publisher<tier4_debug_msgs::msg::Float32Stamped>::SharedPtr exe_time_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -164,6 +168,10 @@ private:
   std::shared_ptr<ApproximateSync> approximate_sync_;
 
   bool is_approximate_sync_;
+  bool use_image_roi_fallback_;
+  int fallback_roi_margin_px_;
+  int64_t fallback_traffic_light_id_;
+  uint8_t fallback_traffic_light_type_;
   double score_thresh_;
   std::vector<int> tlr_label_id_;
 

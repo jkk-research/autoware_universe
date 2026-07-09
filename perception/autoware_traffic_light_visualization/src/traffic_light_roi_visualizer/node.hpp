@@ -62,6 +62,9 @@ class TrafficLightRoiVisualizerNode : public rclcpp::Node
 public:
   explicit TrafficLightRoiVisualizerNode(const rclcpp::NodeOptions & options);
   void connectCb();
+  void imageOnlyRoiCallback(
+    const sensor_msgs::msg::Image::ConstSharedPtr & input_image_msg,
+    const tier4_perception_msgs::msg::TrafficLightRoiArray::ConstSharedPtr & input_tl_roi_msg);
 
   void imageRoiCallback(
     const sensor_msgs::msg::Image::ConstSharedPtr & input_image_msg,
@@ -167,6 +170,12 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr simple_image_pub_;
 
   typedef message_filters::sync_policies::ApproximateTime<
+    sensor_msgs::msg::Image, tier4_perception_msgs::msg::TrafficLightRoiArray>
+    SyncPolicyImageOnly;
+  typedef message_filters::Synchronizer<SyncPolicyImageOnly> SyncImageOnly;
+  std::shared_ptr<SyncImageOnly> sync_image_only_;
+
+  typedef message_filters::sync_policies::ApproximateTime<
     sensor_msgs::msg::Image, tier4_perception_msgs::msg::TrafficLightRoiArray,
     tier4_perception_msgs::msg::TrafficLightArray>
     SyncPolicy;
@@ -181,6 +190,7 @@ private:
   std::shared_ptr<SyncWithRoughRoi> sync_with_rough_roi_;
 
   bool enable_fine_detection_;
+  bool roi_only_mode_;
   bool use_image_transport_;
 };
 

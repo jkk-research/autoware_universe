@@ -68,6 +68,12 @@ TrafficLightFineDetectorNode::TrafficLightFineDetectorNode(const rclcpp::NodeOpt
   // This threshold will be ignored if specified model contains EfficientNMS_TRT module in it
   float nms_threshold = declare_parameter("fine_detector_nms_thresh", 0.65);
   is_approximate_sync_ = this->declare_parameter<bool>("approximate_sync", false);
+  use_image_roi_fallback_ = this->declare_parameter<bool>("use_image_roi_fallback", false);
+  fallback_roi_margin_px_ = this->declare_parameter<int>("fallback_roi_margin_px", 0);
+  fallback_traffic_light_id_ = this->declare_parameter<int>("fallback_traffic_light_id", 1);
+  fallback_traffic_light_type_ = static_cast<uint8_t>(
+    this->declare_parameter<int>(
+      "fallback_traffic_light_type", TrafficLightRoi::CAR_TRAFFIC_LIGHT));
 
   if (!readLabelFile(label_path, tlr_label_id_, num_class)) {
     RCLCPP_ERROR(this->get_logger(), "Could not find tlr id");
@@ -101,6 +107,10 @@ TrafficLightFineDetectorNode::TrafficLightFineDetectorNode(const rclcpp::NodeOpt
     this, get_clock(), 100ms, std::bind(&TrafficLightFineDetectorNode::connectCb, this));
 
   std::lock_guard<std::mutex> lock(connect_mutex_);
+  generated_rough_roi_pub_ =
+    this->create_publisher<TrafficLightRoiArray>("rough/rois", rclcpp::QoS{1});
+  generated_expect_roi_pub_ =
+    this->create_publisher<TrafficLightRoiArray>("expect/rois", rclcpp::QoS{1});
   output_roi_pub_ = this->create_publisher<TrafficLightRoiArray>("~/output/rois", 1);
   exe_time_pub_ =
     this->create_publisher<tier4_debug_msgs::msg::Float32Stamped>("~/debug/exe_time_ms", 1);
@@ -125,13 +135,53 @@ void TrafficLightFineDetectorNode::connectCb()
   std::lock_guard<std::mutex> lock(connect_mutex_);
   if (output_roi_pub_->get_subscription_count() == 0) {
     image_sub_.unsubscribe();
+    image_only_sub_.reset();
     rough_roi_sub_.unsubscribe();
     expect_roi_sub_.unsubscribe();
+  } else if (use_image_roi_fallback_) {
+    if (!image_only_sub_) {
+      image_only_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+        "~/input/image", rclcpp::SensorDataQoS(),
+        std::bind(&TrafficLightFineDetectorNode::imageOnlyCallback, this, std::placeholders::_1));
+    }
   } else if (!image_sub_.getSubscriber()) {
     image_sub_.subscribe(this, "~/input/image", "raw", rmw_qos_profile_sensor_data);
     rough_roi_sub_.subscribe(this, "~/input/rois", rclcpp::QoS{1}.get_rmw_qos_profile());
     expect_roi_sub_.subscribe(this, "~/expect/rois", rclcpp::QoS{1}.get_rmw_qos_profile());
   }
+}
+
+void TrafficLightFineDetectorNode::imageOnlyCallback(
+  const sensor_msgs::msg::Image::ConstSharedPtr in_image_msg)
+{
+  if (in_image_msg->width < 2 || in_image_msg->height < 2) {
+    return;
+  }
+
+  auto rough_roi_msg = std::make_shared<TrafficLightRoiArray>();
+  auto expect_roi_msg = std::make_shared<TrafficLightRoiArray>();
+  rough_roi_msg->header = in_image_msg->header;
+  expect_roi_msg->header = in_image_msg->header;
+
+  TrafficLightRoi tlr;
+  tlr.traffic_light_id = fallback_traffic_light_id_;
+  tlr.traffic_light_type = fallback_traffic_light_type_;
+
+  const uint32_t x_offset = std::min<uint32_t>(
+    std::max(fallback_roi_margin_px_, 0), in_image_msg->width > 0 ? in_image_msg->width - 1 : 0);
+  const uint32_t y_offset = std::min<uint32_t>(
+    std::max(fallback_roi_margin_px_, 0),
+    in_image_msg->height > 0 ? in_image_msg->height - 1 : 0);
+  tlr.roi.x_offset = x_offset;
+  tlr.roi.y_offset = y_offset;
+  tlr.roi.width = std::max<int>(1, static_cast<int>(in_image_msg->width) - 2 * x_offset);
+  tlr.roi.height = std::max<int>(1, static_cast<int>(in_image_msg->height) - 2 * y_offset);
+
+  rough_roi_msg->rois.push_back(tlr);
+  expect_roi_msg->rois.push_back(tlr);
+  generated_rough_roi_pub_->publish(*rough_roi_msg);
+  generated_expect_roi_pub_->publish(*expect_roi_msg);
+  callback(in_image_msg, rough_roi_msg, expect_roi_msg);
 }
 
 void TrafficLightFineDetectorNode::callback(
